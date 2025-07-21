@@ -192,7 +192,7 @@ async function submitToArc(tx: Transaction): Promise<string> {
     
     const logLabel = 'ARC Submit: ' + txid;
     console.time(logLabel);
-    console.timeLog(logLabel, "headers:", JSON.stringify(headers));
+    console.timeLog(logLabel, `${ARC}/v1/tx`, "headers:", JSON.stringify(headers), txbuf.toString('hex'));
     
     const resp = await fetch(`${ARC}/v1/tx`, {
         method: 'POST',
@@ -202,10 +202,11 @@ async function submitToArc(tx: Transaction): Promise<string> {
     
     const respText = await resp.text();
     console.timeLog(logLabel, resp.status, respText);
-    console.timeEnd(logLabel);
+
     
     // Handle HTTP errors and Arc response parsing
     if (!resp.ok) {
+        console.timeLog(logLabel, `Arc broadcast failed for ${txid}: HTTP ${resp.status} - ${respText}`);
         let errorMessage = `HTTP ${resp.status}: ${respText}`;
         try {
             const errorResult = JSON.parse(respText);
@@ -213,6 +214,7 @@ async function submitToArc(tx: Transaction): Promise<string> {
                 errorMessage = `${errorResult.detail} ${errorResult.extraInfo || ''}`;
             }
         } catch (e) {
+            console.error(e)
             // Use raw response if JSON parsing fails
         }
         throw createError(resp.status, `Arc broadcast failed for ${txid}: ${errorMessage}`);
@@ -224,7 +226,7 @@ async function submitToArc(tx: Transaction): Promise<string> {
     } catch (e) {
         throw createError(500, `Invalid JSON response from Arc for ${txid}: ${respText}`);
     }
-    
+    console.timeEnd(logLabel);
     if (result.status && result.status !== 200) {
         const detail = result.detail || '';
         const extraInfo = result.extraInfo || '';
