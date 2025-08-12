@@ -1,6 +1,6 @@
 import { Transaction } from "@bsv/sdk";
 import createError from "http-errors";
-import { cache, redis } from "./db";
+import { cache, loadTx, redis } from "./db";
 
 const { NETWORK, ARC, ARC_AUTH_TOKEN, ARC_CALLBACK_URL, ARC_CALLBACK_TOKEN, INDEXER } = process.env;
 
@@ -18,6 +18,7 @@ export async function broadcastTx(tx: Transaction): Promise<string> {
         // 2. Submit to Arc (30 second timeout max)
         const initialStatus = await submitToArc(tx);
         
+        console.log("INITIAL STATUS: txid -", initialStatus)
         // 3. If we got a final status immediately, we're done
         if (isFinalStatus(initialStatus)) {
             console.timeLog('Broadcast: ' + txid, `Got final status from Arc: ${initialStatus}`);
@@ -160,19 +161,19 @@ async function submitToArc(tx: Transaction): Promise<string> {
     const txid = tx.id('hex') as string;
     
     // TODO: Use EF format when ready
-    // let txbuf: Buffer
-    // try {
-    //     await Promise.all(tx.inputs.map(async txIn => {
-    //         if (txIn.sourceTransaction) return
-    //         txIn.sourceTransaction = await loadTx(txIn.sourceTXID!)
-    //     }))
-    //     txbuf = Buffer.from(tx.toEF());
-    // } catch (e) {
-    //     console.error("Error loading txos", txid, e)
-    //     txbuf = Buffer.from(tx.toBinary());
-    // }
+    let txbuf: Buffer
+    try {
+        await Promise.all(tx.inputs.map(async txIn => {
+            if (txIn.sourceTransaction) return
+            txIn.sourceTransaction = await loadTx(txIn.sourceTXID!)
+        }))
+        txbuf = Buffer.from(tx.toEF());
+    } catch (e) {
+        console.error("Error loading txos", txid, e)
+        txbuf = Buffer.from(tx.toBinary());
+    }
     
-    const txbuf = Buffer.from(tx.toBinary());
+    // const txbuf = Buffer.from(tx.toBinary());
     const headers: { [key: string]: string } = {
         'Content-Type': 'application/octet-stream',
         'X-WaitFor': 'SEEN_ON_NETWORK', // Try to get final status
@@ -192,7 +193,7 @@ async function submitToArc(tx: Transaction): Promise<string> {
     
     const logLabel = 'ARC Submit: ' + txid;
     console.time(logLabel);
-    console.timeLog(logLabel, `${ARC}/v1/tx`, "headers:", JSON.stringify(headers), txbuf.toString('hex'));
+    console.timeLog(logLabel, `${ARC}/v1/tx`, "headers:", JSON.stringify(headers));
     
     const resp = await fetch(`${ARC}/v1/tx`, {
         method: 'POST',
