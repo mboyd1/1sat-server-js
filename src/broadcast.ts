@@ -1,28 +1,29 @@
 import { Transaction } from "@bsv/sdk";
-import createError from "http-errors";
+import * as createError from "http-errors";
 import { cache, loadTx, redis } from "./db";
 
 const { NETWORK, ARC, ARC_AUTH_TOKEN, ARC_CALLBACK_URL, ARC_CALLBACK_TOKEN, INDEXER } = process.env;
 
 export async function broadcastTx(tx: Transaction): Promise<string> {
     const txid = tx.id('hex') as string;
-    console.time('Broadcast: ' + txid);
+    const logLabel = 'ARC Broadcast: ' + txid;
+    console.time(logLabel);
     
     const txbuf = Buffer.from(tx.toBinary());
     await cache.set(`tx:${txid}`, txbuf);
     
     try {
         // 1. Start listening for callbacks BEFORE submitting to Arc
-        const callbackPromise = startCallbackListener(txid, 120000); // 2 minute total timeout
+        const callbackPromise = startCallbackListener(txid, 45000); // 45 second total timeout
         
-        // 2. Submit to Arc (30 second timeout max)
+        // 2. Submit to Arc (15 second timeout max)
         const initialStatus = await submitToArc(tx);
         
-        console.log("INITIAL STATUS: txid -", initialStatus)
+        console.log("ARC INITIAL STATUS: txid -", initialStatus)
         // 3. If we got a final status immediately, we're done
         if (isFinalStatus(initialStatus)) {
-            console.timeLog('Broadcast: ' + txid, `Got final status from Arc: ${initialStatus}`);
-            
+            console.timeLog(logLabel, `Got final status from Arc: ${initialStatus}`);
+
             // Cleanup callback listener since we don't need it
             callbackPromise.cancel();
             
@@ -31,14 +32,15 @@ export async function broadcastTx(tx: Transaction): Promise<string> {
             }
             
             // Success - publish and return
-            console.timeLog('Broadcast: ' + txid, "Publishing to redis");
+            
+            console.timeLog(logLabel, "Publishing to redis");
             await fetch(`${INDEXER}/tx/${txid}/ingest`).catch((e) => console.error("Ingestion error:", e));
             await redis.publish("broadcast", txbuf.toString('base64'));
             return txid;
         }
         
         // 4. Not final status yet - continue waiting on callback listener
-        console.timeLog('Broadcast: ' + txid, `Got intermediate status: ${initialStatus}, waiting for callback`);
+        console.timeLog(logLabel, `Got intermediate status: ${initialStatus}, waiting for callback`);
         const finalStatus = await callbackPromise.promise;
         
         if (isErrorStatus(finalStatus)) {
@@ -46,7 +48,7 @@ export async function broadcastTx(tx: Transaction): Promise<string> {
         }
         
         // Success - publish and return
-        console.timeLog('Broadcast: ' + txid, "Publishing to redis");
+        console.timeLog(logLabel, "Publishing to redis");
         await fetch(`${INDEXER}/tx/${txid}/ingest`).catch((e) => console.error("Ingestion error:", e));
         await redis.publish("broadcast", txbuf.toString('base64'));
         return txid;
@@ -55,7 +57,7 @@ export async function broadcastTx(tx: Transaction): Promise<string> {
         console.error("Broadcast Error:", e);
         throw e;
     } finally {
-        console.timeEnd('Broadcast: ' + txid);
+        console.timeEnd(logLabel);
     }
 }
 
@@ -116,14 +118,14 @@ function startCallbackListener(txid: string, timeoutMs: number): { promise: Prom
                 // Only resolve on final status
                 if (isFinalStatus(update.txStatus)) {
                     cleanup();
-                    console.log(`Got final status via callback: ${txid} -> ${update.txStatus}`);
+                    console.log(`ARC Got final status via callback: ${txid} -> ${update.txStatus}`);
                     resolve(update.txStatus);
                 } else {
                     // Log intermediate status but keep waiting
-                    console.log(`Callback intermediate status: ${txid} -> ${update.txStatus}`);
+                    console.log(`ARC Callback intermediate status: ${txid} -> ${update.txStatus}`);
                 }
             } catch (e) {
-                console.error('Error parsing callback message:', e);
+                console.error('ARC Callback Error parsing callback message:', e);
             }
         });
         
@@ -133,7 +135,7 @@ function startCallbackListener(txid: string, timeoutMs: number): { promise: Prom
             cleanup();
             
             try {
-                console.log(`No final callback received for ${txid} within ${timeoutMs}ms, querying Arc directly`);
+                console.log(`ARC Callback No final callback received for ${txid} within ${timeoutMs}ms, querying Arc directly`);
                 const status = await queryArcTransactionStatus(txid);
                 resolve(status);
             } catch (e) {
@@ -175,9 +177,9 @@ async function submitToArc(tx: Transaction): Promise<string> {
     
     // const txbuf = Buffer.from(tx.toBinary());
     const headers: { [key: string]: string } = {
-        'Content-Type': 'application/octet-stream',
-        'X-WaitFor': 'SEEN_ON_NETWORK', // Try to get final status
-        'X-MaxTimeout': '30', // Arc will timeout after 30 seconds
+        'Content-Type': 'text/plain',
+        'X-WaitFor': 'ACCEPTED_BY_NETWORK', // Try to get final status
+        'X-MaxTimeout': '15', // Arc will timeout after 15 seconds
         'X-FullStatusUpdates': 'true',
     };
     
@@ -191,18 +193,18 @@ async function submitToArc(tx: Transaction): Promise<string> {
         headers['Authorization'] = `Bearer ${ARC_AUTH_TOKEN}`;
     }
     
-    const logLabel = 'ARC Submit: ' + txid;
+    const logLabel = 'ARC Submit ' + txid;
     console.time(logLabel);
-    console.timeLog(logLabel, `${ARC}/v1/tx`, "headers:", JSON.stringify(headers));
+    console.timeLog(logLabel, `Request: ${ARC}/v1/tx`, "headers:", JSON.stringify(headers));//, tx.toHex());
     
     const resp = await fetch(`${ARC}/v1/tx`, {
         method: 'POST',
         headers,
-        body: txbuf,
+        body: txbuf.toString('hex'),
     });
     
     const respText = await resp.text();
-    console.timeLog(logLabel, resp.status, respText);
+    console.timeLog(logLabel, "Response", resp.status, respText);
 
     
     // Handle HTTP errors and Arc response parsing
@@ -245,7 +247,7 @@ async function submitToArc(tx: Transaction): Promise<string> {
 
 // Helper functions
 function isFinalStatus(status: string): boolean {
-    return ['SEEN_ON_NETWORK', 'MINED', 'CONFIRMED', 'REJECTED', 'DOUBLE_SPEND_ATTEMPTED', 'SEEN_IN_ORPHAN_MEMPOOL'].includes(status);
+    return ['ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'MINED', 'CONFIRMED', 'REJECTED', 'DOUBLE_SPEND_ATTEMPTED', 'SEEN_IN_ORPHAN_MEMPOOL'].includes(status);
 }
 
 function isErrorStatus(status: string): boolean {

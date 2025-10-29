@@ -53,7 +53,7 @@ export class TxController extends Controller {
         
         await redis.publish(channel, JSON.stringify(message));
         
-        console.log(`ARC Broadcast callback: ${txid} -> ${body.txStatus}`);
+        console.log(`ARC Broadcast callback: ${txid} -> ${body.txStatus}`, new Date().toISOString());
         
         // Optional: Store status history in Redis for debugging
         if (body.txStatus) {
