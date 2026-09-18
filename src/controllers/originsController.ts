@@ -1,6 +1,6 @@
 import { NotFound } from 'http-errors';
 import { Controller, Get, Path, Route } from "tsoa";
-import { pool } from "../db";
+import { readPool } from "../db";
 import { Txo } from '../models/txo';
 import { Outpoint } from '../models/outpoint';
 
@@ -8,7 +8,7 @@ import { Outpoint } from '../models/outpoint';
 export class OriginsController extends Controller {
     @Get("count")
     public async getCount(): Promise<{count: number}> {
-        const { rows: [{count}] } = await pool.query(`SELECT MAX(num) as count FROM inscriptions`);
+        const { rows: [{count}] } = await readPool.query(`SELECT MAX(num) as count FROM inscriptions`);
         return {count};
     }
 
@@ -18,7 +18,7 @@ export class OriginsController extends Controller {
     ): Promise<Txo> {
         this.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
         const [height, idx, vout] = num.split(':')
-        const {rows: [latest]} = await pool.query(`
+        const {rows: [latest]} = await readPool.query(`
             SELECT t.*, o.data as odata, o.height as oheight, o.idx as oidx, o.vout as ovout
             FROM txos t
             JOIN txos o ON o.outpoint = t.origin
@@ -38,7 +38,7 @@ export class OriginsController extends Controller {
     public async getOriginMap(
         @Path() origin: string,
     ): Promise<any> {
-        const {rows: {map}} = await pool.query(`
+        const {rows: {map}} = await readPool.query(`
             SELECT map
             FROM origins
             WHERE origin = $1`,

@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Post, Query, Route } from "tsoa";
-import { pool } from "../db";
+import { readPool } from "../db";
 import { Txo } from "../models/txo";
 import { SortDirection } from "../models/sort-direction";
 import { Address } from "@ts-bitcoin/core";
@@ -124,7 +124,7 @@ export class MarketController extends Controller {
         sql.push(`OFFSET $${params.length}`)
         
         // console.log(sql.join(' '), params)
-        const { rows } = await pool.query(sql.join(' '), params);
+        const { rows } = await readPool.query(sql.join(' '), params);
         return rows.map((row: any) => Txo.fromRow(row));
     }
 
@@ -223,7 +223,7 @@ export class MarketController extends Controller {
         sql.push(`OFFSET $${params.length}`)
         
         // console.log(sql.join(' '), params)
-        const { rows } = await pool.query(sql.join(' '), params);
+        const { rows } = await readPool.query(sql.join(' '), params);
         return rows.map((row: any) => Txo.fromRow(row));
     }
 }

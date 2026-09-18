@@ -3,7 +3,7 @@ import { NotFound } from "http-errors";
 import { Controller, Get, Path, Query, Request, Route } from "tsoa";
 import { Outpoint } from "../models/outpoint";
 import { InscriptionData, Txo } from "../models/txo";
-import { pool } from "../db";
+import { readPool } from "../db";
 
 @Route("content")
 export class ContentController extends Controller {
@@ -41,7 +41,7 @@ export class ContentController extends Controller {
         @Request() req: ExpRequest
     ): 
     Promise<void> {
-        const { rows: [lastest] } = await pool.query(`
+        const { rows: [lastest] } = await readPool.query(`
             SELECT t.*, o.data as odata, o.height as oheight, o.idx as oidx, o.vout as ovout
             FROM txos t
             JOIN txos o ON o.outpoint = t.origin

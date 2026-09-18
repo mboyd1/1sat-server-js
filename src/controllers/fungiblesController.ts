@@ -1,7 +1,7 @@
 import { Address } from '@ts-bitcoin/core';
 import { BadRequest, NotFound } from 'http-errors';
 import { Controller, Get, Path, Query, Route } from "tsoa";
-import { cache, pool, redis } from "../db";
+import { cache, pool, readPool, redis } from "../db";
 import { Outpoint } from '../models/outpoint';
 import { BSV20Txo } from '../models/bsv20Txo';
 import { Token } from '../models/token';
@@ -28,7 +28,7 @@ export class FungiblesController extends Controller {
         @Query() included = true,
     ): Promise<Token[]> {
 
-        const { rows } = await pool.query(`SELECT b.*, b.fund_total>=${includeThreshold} as included
+        const { rows } = await readPool.query(`SELECT b.*, b.fund_total>=${includeThreshold} as included
             FROM bsv20  b
             WHERE b.status = 1 and b.tick != ''
             ${included ? `AND b.fund_total>=${includeThreshold}` : ''}
@@ -47,7 +47,7 @@ export class FungiblesController extends Controller {
         @Query() dir: 'asc' | 'desc' = 'desc',
         @Query() included = true,
     ): Promise<Token[]> {
-        const { rows } = await pool.query(`SELECT b.*, b.fund_total>=${includeThreshold} as included, t.data
+        const { rows } = await readPool.query(`SELECT b.*, b.fund_total>=${includeThreshold} as included, t.data
             FROM bsv20_v2 b
             JOIN txos t ON t.outpoint = b.id
             ${included ? `WHERE fund_total>=${includeThreshold}` : ''}
@@ -457,7 +457,7 @@ export class FungiblesController extends Controller {
                 t.data ? 'lock' AND b.status=1 AND b.id=$1`
 
         // console.log(sql, params)
-        const { rows: [stats] } = await pool.query(sql, params);
+        const { rows: [stats] } = await readPool.query(sql, params);
         await cache.set(cacheId, stats.locked_amt, 'EX', 600)
         return stats.locked_amt
     }
@@ -477,7 +477,7 @@ export class FungiblesController extends Controller {
             WHERE status=1 AND op='burn' AND id=$1`
 
         // console.log(sql, params)
-        const { rows: [stats] } = await pool.query(sql, params);
+        const { rows: [stats] } = await readPool.query(sql, params);
         await cache.set(cacheId, stats.burned_amt, 'EX', 600)
         return stats.burned_amt
     }
@@ -590,7 +590,7 @@ export class FungiblesController extends Controller {
         }
         tick = tick.toUpperCase();
 
-        const { rows: [row] } = await pool.query(`
+        const { rows: [row] } = await readPool.query(`
             SELECT *
             FROM bsv20
             WHERE status IN (0,1) AND tick=$1`,
@@ -604,7 +604,7 @@ export class FungiblesController extends Controller {
 
         let accounts = await cache.get(`accts:${tick}`)
         if (!accounts) {
-            const { rows: [row] } = await pool.query(`
+            const { rows: [row] } = await readPool.query(`
                 SELECT COUNT(DISTINCT pkhash) as count
                 FROM bsv20_txos
                 WHERE spend='\\x' AND tick=$1 AND status=1`,
@@ -647,7 +647,7 @@ export class FungiblesController extends Controller {
             return JSON.parse(status).slice(offset, offset + limit);
         }
 
-        const { rows } = await pool.query(`
+        const { rows } = await readPool.query(`
             SELECT pkhash, SUM(amt) as amt
             FROM bsv20_txos
             WHERE tick=$1 AND status=1 AND spend='\\x' and pkhash != '\\x'
@@ -668,7 +668,7 @@ export class FungiblesController extends Controller {
         @Path() id: string,
     ): Promise<Token> {
         const tokenId = Outpoint.fromString(id).toBuffer();
-        const { rows: [row] } = await pool.query(`
+        const { rows: [row] } = await readPool.query(`
             SELECT b.*, fund_total>=${includeThreshold} as included, t.data
             FROM bsv20_v2 b
             JOIN txos t ON t.txid=b.txid AND t.vout=b.vout
@@ -683,7 +683,7 @@ export class FungiblesController extends Controller {
 
         let accounts = await cache.get(`accts:${id}`)
         if (!accounts) {
-            const { rows: [row] } = await pool.query(`
+            const { rows: [row] } = await readPool.query(`
                 SELECT COUNT(DISTINCT pkhash) as count
                 FROM bsv20_txos
                 WHERE spend='\\x' AND id=$1 AND status=1`,
@@ -722,7 +722,7 @@ export class FungiblesController extends Controller {
             return JSON.parse(status).slice(offset, offset + limit);
         }
 
-        const { rows } = await pool.query(`
+        const { rows } = await readPool.query(`
             SELECT pkhash, SUM(amt) as amt
             FROM bsv20_txos
             WHERE id=$1 AND status=1 AND spend='\\x'
@@ -784,7 +784,7 @@ export class FungiblesController extends Controller {
             OFFSET $${params.push(offset)}`
 
         // console.log(sql, params);
-        const { rows } = await pool.query(sql, params)
+        const { rows } = await readPool.query(sql, params)
         return rows.map(BSV20Txo.fromRow)
     }
 
@@ -800,7 +800,10 @@ export class FungiblesController extends Controller {
         @Query() address?: string,
     ): Promise<BSV20Txo[]> {
         let params: any[] = [];
-        let where = 't.sale=true '
+        // spend <> '\\x' is redundant on its own -- a sale is by definition spent -- but it is the
+        // predicate every partial sales index carries (idx_bsv20_txos_sales and friends). Without it
+        // the planner cannot use them and falls back to a seq scan of bsv20_txos (28GB, 35M rows).
+        let where = `t.sale=true AND t.spend <> '\\x' `
         if (pending) {
             where += 'AND t.status IN (0,1) '
         } else {
@@ -833,7 +836,7 @@ export class FungiblesController extends Controller {
             OFFSET $${params.push(offset)}`
 
         // console.log(sql, params);
-        const { rows } = await pool.query(sql, params)
+        const { rows } = await readPool.query(sql, params)
         return rows.map(BSV20Txo.fromRow)
     }
 

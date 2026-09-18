@@ -2,7 +2,7 @@ import { Address } from '@ts-bitcoin/core';
 import { BadRequest } from 'http-errors';
 import { Body, Controller, Get, Path, Post, Query, Route } from "tsoa";
 import { Txo, TxoData } from "../models/txo";
-import { pool } from "../db";
+import { readPool } from "../db";
 
 @Route("api/locks")
 export class LocksController extends Controller {
@@ -10,7 +10,7 @@ export class LocksController extends Controller {
     public async getLocksByTxid(
         @Path() txid: string,
     ): Promise<Txo[]> {
-        const { rows } = await pool.query(`SELECT *
+        const { rows } = await readPool.query(`SELECT *
             FROM txos
             WHERE txid = $1`,
             [Buffer.from(txid, 'hex')]
@@ -63,7 +63,7 @@ export class LocksController extends Controller {
         sql.push(`OFFSET $${params.length}`)
 
         // console.log(sql, params)
-        const { rows } = await pool.query(sql.join(' '), params);
+        const { rows } = await readPool.query(sql.join(' '), params);
         return rows.map((row: any) => Txo.fromRow(row));
     }
 
@@ -88,7 +88,7 @@ export class LocksController extends Controller {
         sql.push(`OFFSET $${params.length}`)
 
         // console.log(sql.join(' '), params)
-        const { rows } = await pool.query(sql.join(' '), params);
+        const { rows } = await readPool.query(sql.join(' '), params);
         return rows.map((row: any) => Txo.fromRow(row));
     }
 
@@ -130,7 +130,7 @@ export class LocksController extends Controller {
         sql += `OFFSET $${params.length} `
 
         // console.log(sql, params)
-        const { rows } = await pool.query(sql, params);
+        const { rows } = await readPool.query(sql, params);
         return rows.map((row: any) => {
             const txo = Txo.fromRow(row)
             if (txo.data) {
