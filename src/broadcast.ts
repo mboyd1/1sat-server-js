@@ -10,7 +10,7 @@ export async function broadcastTx(tx: Transaction): Promise<string> {
     console.time(logLabel);
     
     const txbuf = Buffer.from(tx.toBinary());
-    await cache.set(`tx:${txid}`, txbuf);
+    await cache.setex(`tx:${txid}`, 600, txbuf);
     
     try {
         // 1. Start listening for callbacks BEFORE submitting to Arc
@@ -162,7 +162,6 @@ function startCallbackListener(txid: string, timeoutMs: number): { promise: Prom
 async function submitToArc(tx: Transaction): Promise<string> {
     const txid = tx.id('hex') as string;
     
-    // TODO: Use EF format when ready
     let txbuf: Buffer
     try {
         await Promise.all(tx.inputs.map(async txIn => {
