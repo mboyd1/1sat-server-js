@@ -1,7 +1,7 @@
 import { NotFound } from 'http-errors';
 import * as createError from 'http-errors'
 import { Body, Controller, Get, Path, Post, Query, Route } from "tsoa";
-import { cache, loadTx, pool} from "../db";
+import { cache, loadTx, readPool } from "../db";
 import { Txo } from "../models/txo";
 import { TxoData } from "../models/txo";
 import { Outpoint } from "../models/outpoint";
@@ -17,6 +17,8 @@ interface TxidsResponse {
     height: number;
     idx: number;
 }
+
+const MAX_HISTORY_LIMIT = 5000;
 
 @Route("api/inscriptions")
 export class InscriptionsController extends Controller {
@@ -63,7 +65,7 @@ export class InscriptionsController extends Controller {
         @Query() offset: number = 0
     ): Promise<Txo[]> {
         this.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        const { rows } = await pool.query(`
+        const { rows } = await readPool.query(`
             SELECT t.*, o.data as odata, o.height as oheight, o.idx as oidx, o.vout as ovout
             FROM txos t
             JOIN txos o ON o.outpoint = t.origin
@@ -97,7 +99,7 @@ export class InscriptionsController extends Controller {
             params.push(`${h}%`)
             where.push(`t.geohash LIKE $${params.length}`)
         })
-        const { rows } = await pool.query(`
+        const { rows } = await readPool.query(`
             SELECT t.*, o.data as odata, o.height as oheight, o.idx as oidx, o.vout as ovout
             FROM txos t
             JOIN txos o ON o.outpoint = t.origin
@@ -126,7 +128,7 @@ export class InscriptionsController extends Controller {
         @Path() outpoint: string,
     ): Promise<TxidsResponse[]> {
         this.setHeader('Cache-Control', 'public,max-age=86400')
-        const { rows } = await pool.query(`
+        const { rows } = await readPool.query(`
             SELECT o.txid, o.height, o.idx
             FROM txos t
             JOIN txos o ON o.origin = t.origin AND o.spend != '\\x'
@@ -149,7 +151,7 @@ export class InscriptionsController extends Controller {
         if (outpoints.length > 100) {
             throw new BadRequest('Too many outpoints');
         }
-        const { rows } = await pool.query(`
+        const { rows } = await readPool.query(`
             SELECT o.txid, o.height, o.idx
             FROM txos t
             JOIN txos o ON o.origin = t.origin AND o.spend != '\\x'
@@ -170,7 +172,7 @@ export class InscriptionsController extends Controller {
         @Path() num: string,
     ): Promise<Txo> {
         this.setHeader('Cache-Control', 'public,max-age=86400')
-        const { rows: [row] } = await pool.query(`
+        const { rows: [row] } = await readPool.query(`
             SELECT t.*, o.data as odata, o.height as oheight, o.idx as oidx, o.vout as ovout, i.num as inum
             FROM txos t
             JOIN txos o ON o.outpoint = t.origin
@@ -199,7 +201,7 @@ export class InscriptionsController extends Controller {
             JOIN txos o ON o.outpoint = t.origin
             WHERE t.outpoint = $1`;
 
-        const { rows: [latest] } = await pool.query(sql,
+        const { rows: [latest] } = await readPool.query(sql,
             [outpoint]
         );
 
@@ -238,7 +240,15 @@ export class InscriptionsController extends Controller {
         const url = `${INDEXER}/origin/${origin}/latest`
         const resp = await fetch(url)
         if (!resp.ok) {
-            console.log("latest error:", resp.status, await resp.text())
+            const body = await resp.text()
+            // The indexer answers "no rows in result set" with a 500, and rethrowing that
+            // verbatim turned every unknown origin into a 500: 1,641 of them across 247
+            // origins in one evening, all of which are really 404s. Translate here rather
+            // than in the indexer, whose running binary predates its own source tree.
+            if (/no rows in result set/i.test(body)) {
+                throw new NotFound(`No latest outpoint for origin ${origin}`)
+            }
+            console.log("latest error:", resp.status, body)
             throw createError(resp.status, resp.statusText)
         }
         const outpoint = Buffer.from(await resp.arrayBuffer())
@@ -254,7 +264,7 @@ export class InscriptionsController extends Controller {
     ): Promise<TxidsResponse[]> {
         this.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
         const add = Address.fromString(address);
-        const { rows } = await pool.query(`
+        const { rows } = await readPool.query(`
             SELECT o.txid, o.height, o.idx
             FROM txos t
             JOIN txos o ON o.origin = t.origin AND o.spend != '\\x'
@@ -271,18 +281,28 @@ export class InscriptionsController extends Controller {
         }));
     }
 
+    // Bounded on 2026-09-17. Unbounded, this returned every row for an origin: the two
+    // hottest origins are 21k and 24k rows (~30MB of JSON each) and were requested ~51k
+    // times in a day, saturating the read replica and dominating gzip CPU on the proxy.
+    // Ordering is unchanged, so page 0 is a prefix of the old response.
     @Get("{origin}/history")
     public async getHistoryByOrigin(
         @Path() origin: string,
+        @Query() limit: number = 1000,
+        @Query() offset: number = 0,
     ): Promise<Txo[]> {
         this.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
-        const { rows } = await pool.query(`
+        // Clamp so a caller can't reinstate the unbounded scan with ?limit=1000000.
+        const lim = Math.min(Math.max(Math.floor(Number(limit)) || 1000, 1), MAX_HISTORY_LIMIT);
+        const off = Math.max(Math.floor(Number(offset)) || 0, 0);
+        const { rows } = await readPool.query(`
             SELECT t.*, o.data as odata, o.height as oheight, o.idx as oidx, o.vout as ovout
             FROM txos t
             JOIN txos o ON o.outpoint = t.origin
             WHERE t.origin = $1
-            ORDER BY t.height ASC, t.idx ASC, t.spend DESC`,
-            [Outpoint.fromString(origin).toBuffer()]
+            ORDER BY t.height ASC, t.idx ASC, t.spend DESC
+            LIMIT $2 OFFSET $3`,
+            [Outpoint.fromString(origin).toBuffer(), lim, off]
         );
 
         return rows.map(r => Txo.fromRow(r));
@@ -293,7 +313,7 @@ export class InscriptionsController extends Controller {
         @Path() origin: string,
     ): Promise<TxidsResponse[]> {
         this.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
-        const { rows } = await pool.query(`
+        const { rows } = await readPool.query(`
             SELECT txid, height, idx
             FROM txos
             WHERE t.origin = $1
@@ -316,7 +336,7 @@ export class InscriptionsController extends Controller {
             throw new BadRequest('Too many origins');
         }
         const outpoints = await Promise.all(origins.map(o => this.getLatest(o)))
-        const { rows } = await pool.query(`
+        const { rows } = await readPool.query(`
             SELECT t.*, o.data as odata, o.height as oheight, o.idx as oidx, o.vout as ovout
             FROM txos t
             JOIN txos o ON o.outpoint = t.origin

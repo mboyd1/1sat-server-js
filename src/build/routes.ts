@@ -2053,6 +2053,8 @@ export function RegisterRoutes(app: Router) {
             function InscriptionsController_getHistoryByOrigin(request: ExRequest, response: ExResponse, next: any) {
             const args: Record<string, TsoaRoute.ParameterSchema> = {
                     origin: {"in":"path","name":"origin","required":true,"dataType":"string"},
+                    limit: {"default":1000,"in":"query","name":"limit","dataType":"double"},
+                    offset: {"default":0,"in":"query","name":"offset","dataType":"double"},
             };
 
             // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
