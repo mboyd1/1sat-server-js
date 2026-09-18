@@ -1,3 +1,4 @@
+import { BadRequest } from 'http-errors';
 export class Outpoint {
     txid: Buffer = Buffer.alloc(32);
     vout: number = 0;
@@ -20,7 +21,9 @@ export class Outpoint {
 
     static fromString(str: string) {
         const origin = new Outpoint();
-        if(!str.match(/^[0-9a-fA-F]{64}_\d*$/)) throw new Error('invalid outpoint')
+        // A bare Error surfaces as a 500. Callers sending "<txid>:0" instead of "<txid>_0"
+        // generated 1,027 bogus 500s in a day; that is bad input, so answer 400.
+        if(!str.match(/^[0-9a-fA-F]{64}_\d*$/)) throw new BadRequest(`invalid outpoint '${str}' (expected <64-hex txid>_<vout>)`)
         origin.txid = Buffer.from(str.slice(0, 64), 'hex');
         origin.vout = parseInt(str.slice(65), 10);
         return origin;

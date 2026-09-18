@@ -1,3 +1,4 @@
+import { BadRequest } from 'http-errors';
 import { Address } from '@ts-bitcoin/core';
 import { Body, Controller, Get, Path, Post, Query, Route } from "tsoa";
 import { Txo } from "../models/txo";
@@ -6,6 +7,8 @@ import { TxoData } from "../models/txo";
 import { Outpoint } from '../models/outpoint';
 import { SortDirection } from '../models/sort-direction';
 import { Utils } from '@bsv/sdk';
+
+const MAX_OUTPOINTS = 32000;
 
 @Route("api/txos")
 export class TxosController extends Controller {
@@ -267,11 +270,21 @@ export class TxosController extends Controller {
         return txo
     }
 
+    // Bounded on 2026-09-17. express.json accepts bodies up to 150MB, so this could be
+    // handed millions of outpoints; 60-77s responses against the PRIMARY were the result.
+    // 32000 is deliberately generous: proxy byte logs mix gzipped and uncompressed
+    // responses, so the true median batch is somewhere between ~2k and ~16k. The batch
+    // log line below settles that from the app side -- tighten this once it's known.
     @Post("outpoints")
     public async postOutpoints(
         @Body() outpoints: string[],
         @Query() script = false,
     ): Promise<Txo[]> {
+        // Checked before parsing so an oversized body is rejected cheaply.
+        console.log('OUTPOINTS batch:', outpoints.length);
+        if (outpoints.length > MAX_OUTPOINTS) {
+            throw new BadRequest(`Too many outpoints: ${outpoints.length} (max ${MAX_OUTPOINTS}). Split into smaller batches.`);
+        }
         const op = outpoints.map((op) => Outpoint.fromString(op).toBuffer());
         const { rows } = await pool.query(`
             SELECT t.*, o.data as odata, o.height as oheight, o.idx as oidx, o.vout as ovout
