@@ -2,10 +2,11 @@ import * as cors from 'cors';
 import * as dotenv from 'dotenv';
 dotenv.config();
 import * as express from 'express';
-import { Request, Response } from 'express';
+import { Response } from 'express';
 import { NotFound } from 'http-errors';
 import "isomorphic-fetch";
 import * as swaggerUi from 'swagger-ui-express'
+import * as swaggerDocument from './build/swagger.json'
 import { RegisterRoutes } from "./build/routes";
 import * as path from 'path';
 import { Redis } from 'ioredis';
@@ -19,8 +20,43 @@ const server = express();
 
 async function main() {
     const port = PORT || 8081
-    server.listen(port, () => {
+    const httpServer = server.listen(port, () => {
         console.log(`Server listening on port ${port}`);
+    });
+
+    // Graceful shutdown. pm2 recycles workers (max_memory_restart, reload) by signalling
+    // them; with no handler the process died instantly and every in-flight request just
+    // hung until the caller's own timeout -- that is what surfaced as "timeout of 48000ms
+    // exceeded" on the health check. Stop accepting, let running requests finish, then exit.
+    let shuttingDown = false;
+    const shutdown = (signal: string) => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        console.log(`${signal} received, draining connections`);
+        httpServer.close(() => {
+            console.log('drained, exiting');
+            process.exit(0);
+        });
+        // close() alone waits on idle keep-alive sockets that may never close on their
+        // own, so the drain always hit the deadline instead of finishing. Drop the idle
+        // ones immediately; in-flight requests keep their connection until they respond.
+        httpServer.closeIdleConnections?.();
+        // Hard deadline, kept under pm2's kill_timeout so we exit on our own terms
+        // rather than being SIGKILLed halfway through a response.
+        const t = setTimeout(() => {
+            console.log('drain timed out, exiting anyway');
+            httpServer.closeAllConnections?.();
+            process.exit(0);
+        }, 8000);
+        t.unref();
+    };
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    // pm2's God/Reload.js can recycle a worker by sending the string 'shutdown' over IPC
+    // rather than signalling it. Observed behaviour on pm2 5.3.0 here is SIGINT, so this
+    // path is belt-and-braces; kept because it costs nothing and versions differ.
+    process.on('message', (msg: any) => {
+        if (msg === 'shutdown') shutdown('shutdown');
     });
 }
 
@@ -178,13 +214,13 @@ function publishMessage(res: Response, event: string, message: string, id?: stri
     }
 }
 
+// swagger-ui-express keeps the generated init script in module-level state that is
+// only populated by generateHTML(). Calling it per-request primes just the cluster
+// worker that served the HTML, so sibling workers return an empty swagger-ui-init.js.
+// serveFiles()/setup() bake the doc in at startup, in every worker.
 server.use("/api/docs",
-    swaggerUi.serve,
-    async (_req: Request, res: Response) => {
-        return res.send(
-            swaggerUi.generateHTML(await import("./build/swagger.json"))
-        );
-    });
+    swaggerUi.serveFiles(swaggerDocument),
+    swaggerUi.setup(swaggerDocument));
 
 RegisterRoutes(server);
 
