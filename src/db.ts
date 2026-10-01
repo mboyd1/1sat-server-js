@@ -2,8 +2,9 @@ import { JungleBusClient } from "@gorillapool/js-junglebus";
 import { NotFound } from 'http-errors';
 import { Redis } from "ioredis";
 import { Pool } from 'pg';
-import { MerklePath, Transaction, Utils } from "@bsv/sdk";
+import { MerklePath, Transaction } from "@bsv/sdk";
 import { BlockHeader } from "./models/block";
+import { outputScript } from "./rawtx";
 
 const { POSTGRES_FULL, POSTGRES_READ, BITCOIN_HOST, BITCOIN_PORT, JUNGLEBUS, REDISDB, REDISCACHE, HEADERS } = process.env;
 export const jb = new JungleBusClient(JUNGLEBUS || 'https://junglebus.gorillapool.io');
@@ -125,10 +126,14 @@ export async function loadRawtx(txid: string): Promise<Buffer> {
 
     if (!rawtx) {
         const url = `${JUNGLEBUS}/v1/transaction/get/${txid}/bin`
+        // Logged before the fetch as well as after: a request that kills its worker never
+        // reaches the response-time log, so this line is the only trace of what it was.
         console.log('JB fetch:', url)
+        const started = Date.now();
         const resp = await fetch(url);
         if (resp.ok && resp.status == 200) {
             const buf = await resp.arrayBuffer();
+            console.log('JB fetched:', txid, `${buf.byteLength}B`, `${Date.now() - started}ms`)
             if (buf.byteLength > 0) {
                 rawtx = Buffer.from(buf);
                 await cache.setex(cacheKey, 600, rawtx);
@@ -155,24 +160,49 @@ export async function loadRawtx(txid: string): Promise<Buffer> {
     throw new NotFound(`${txid} not found`);
 }
 
+// Builds a full SDK Transaction, which costs ~40x the tx size in heap (see rawtx.ts).
+// Only for callers that really need one; use loadOutputScript to read a single output.
 export async function loadTx(txid: string): Promise<Transaction> {
     const rawtx = await loadRawtx(txid);
     return Transaction.fromBinary([...rawtx]);
 }
 
-export async function loadTxWithProof(txid: string): Promise<number[]> {
+export async function loadOutputScript(txid: string, vout: number): Promise<Buffer> {
+    const script = outputScript(await loadRawtx(txid), vout);
+    if (!script) {
+        throw new NotFound(`${txid}_${vout} not found`);
+    }
+    return script;
+}
+
+function varInt(n: number): Buffer {
+    if (n < 0xfd) return Buffer.from([n]);
+    if (n <= 0xffff) {
+        const b = Buffer.alloc(3);
+        b[0] = 0xfd;
+        b.writeUInt16LE(n, 1);
+        return b;
+    }
+    if (n <= 0xffffffff) {
+        const b = Buffer.alloc(5);
+        b[0] = 0xfe;
+        b.writeUInt32LE(n, 1);
+        return b;
+    }
+    const b = Buffer.alloc(9);
+    b[0] = 0xff;
+    b.writeBigUInt64LE(BigInt(n), 1);
+    return b;
+}
+
+export async function loadTxWithProof(txid: string): Promise<Buffer> {
     const [rawtx, proof] = await Promise.all([
-        loadRawtx(txid).then(rawtx => [...rawtx] as number[]),
-        loadProof(txid).then(proof => [...proof] as number[]).catch(() => [] as number[])
+        loadRawtx(txid),
+        loadProof(txid).catch(() => Buffer.alloc(0))
     ])
 
-    const writer = new Utils.Writer();
-    writer.writeVarIntNum(rawtx.length)
-    writer.write(rawtx)
-    writer.writeVarIntNum(proof.length)
-    writer.write(proof)
-    const resp = writer.toArray();
-    console.log('GET TX:', txid, rawtx.length, proof.length, JSON.stringify(resp.slice(0, 10)))
+    const resp = Buffer.concat([varInt(rawtx.length), rawtx, varInt(proof.length), proof]);
+    console.log('GET TX:', txid, rawtx.length, proof.length, JSON.stringify([...resp.subarray(0, 10)]))
     return resp;
 }
 

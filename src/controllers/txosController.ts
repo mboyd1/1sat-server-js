@@ -2,11 +2,10 @@ import { BadRequest } from 'http-errors';
 import { Address } from '@ts-bitcoin/core';
 import { Body, Controller, Get, Path, Post, Query, Route } from "tsoa";
 import { Txo } from "../models/txo";
-import { cache, loadTx, pool } from "../db";
+import { cache, loadOutputScript, pool } from "../db";
 import { TxoData } from "../models/txo";
 import { Outpoint } from '../models/outpoint';
 import { SortDirection } from '../models/sort-direction';
-import { Utils } from '@bsv/sdk';
 
 const MAX_OUTPOINTS = 32000;
 
@@ -264,8 +263,7 @@ export class TxosController extends Controller {
         this.setHeader('Cache-Control', 'public,max-age=86400')
         const txo = await Txo.getByOutpoint(Outpoint.fromString(outpoint));
         if (script) {
-            const tx = await loadTx(txo.txid);
-            txo.script = Utils.toBase64(tx.outputs[txo.vout].lockingScript.toBinary());
+            txo.script = (await loadOutputScript(txo.txid, txo.vout)).toString('base64');
         }
         return txo
     }
@@ -296,8 +294,7 @@ export class TxosController extends Controller {
         return Promise.all(rows.map(async (row: any) => {
             const txo = Txo.fromRow(row)
             if (script) {
-                const tx = await loadTx(txo.txid);
-                txo.script = Utils.toBase64(tx.outputs[txo.vout].lockingScript.toBinary());
+                txo.script = (await loadOutputScript(txo.txid, txo.vout)).toString('base64');
             }
             return txo;
         }));
