@@ -1,13 +1,12 @@
 import { BadRequest } from 'http-errors';
 import { Outpoint } from "./outpoint";
-import { loadTx, pool } from "../db";
+import { loadRawtx, pool } from "../db";
+import { outputScript, outputScripts, parseInscription } from "../rawtx";
 import { Sigma } from "./sigma";
 import { NotFound } from 'http-errors';
 import { SortDirection } from './sort-direction';
-import { OP, Script, Utils } from '@bsv/sdk';
+import { Utils } from '@bsv/sdk';
 
-const B = '19HxigV4QyBv3tHpQVcUEQyq1pzZVdoAut'
-const ORD = 'ord'
 export interface InscriptionData {
     type?: string;
     data?: Buffer;
@@ -150,51 +149,17 @@ export class Txo {
         return txo;
     }
 
-    static async loadFileByOutpoint(outpoint: Outpoint) {
-        const tx = await loadTx(outpoint.txid.toString('hex'));
-        return Txo.parseOutputScript(tx.outputs[outpoint.vout].lockingScript);
+    static async loadFileByOutpoint(outpoint: Outpoint): Promise<InscriptionData | undefined> {
+        const rawtx = await loadRawtx(outpoint.txid.toString('hex'));
+        const script = outputScript(rawtx, outpoint.vout);
+        return script && parseInscription(script);
     }
 
     static async loadFileByTxid(txid: string): Promise<InscriptionData | undefined> {
-        const tx = await loadTx(txid);
-        for (let txOut of tx.outputs) {
-            const data = await this.parseOutputScript(txOut.lockingScript);
+        const rawtx = await loadRawtx(txid);
+        for (const script of outputScripts(rawtx)) {
+            const data = parseInscription(script);
             if (data) return data;
-        }
-        return;
-    }
-
-    static parseOutputScript(script: Script): InscriptionData | undefined {
-        let opFalse = 0;
-        let opIf = 0;
-        for (let [i, chunk] of script.chunks.entries()) {
-            if (chunk.op === OP.OP_FALSE) {
-                opFalse = i;
-            }
-            if (chunk.op === OP.OP_IF) {
-                opIf = i;
-            }
-            if (chunk.data && Utils.toUTF8(chunk.data) == ORD && opFalse === i - 2 && opIf === i - 1) {
-                let insData = {} as InscriptionData;
-                for (let j = i + 1; j < script.chunks.length; j += 2) {
-                    switch (script.chunks[j].op) {
-                        case OP.OP_0:
-                            insData.data = Buffer.from(script.chunks[j + 1].data || []);
-                            return insData;
-                        case OP.OP_1:
-                            insData.type = Utils.toUTF8(script.chunks[j + 1].data || []);
-                            break;
-                        case OP.OP_ENDIF:
-                            break;
-                    }
-                }
-            }
-            if (Utils.toUTF8(chunk.data || []) == B) {
-                let insData = {} as InscriptionData;
-                insData.data = Buffer.from(script.chunks[i+1]?.data || []);
-                insData.type = Utils.toUTF8(script.chunks[i+2]?.data || []);
-                return insData;
-            }
         }
         return;
     }

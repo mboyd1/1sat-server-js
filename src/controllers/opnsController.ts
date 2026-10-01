@@ -1,10 +1,9 @@
 import { NotFound } from 'http-errors';
 import { Controller, Get, Path, Route } from "tsoa";
-import { loadTx, pool } from "../db";
+import { loadOutputScript, pool } from "../db";
 import { Outpoint } from '../models/outpoint';
 import { Address } from '@ts-bitcoin/core';
 import { Txo } from '../models/txo';
-import { Utils } from '@bsv/sdk';
 
 export interface OpnsResponse {
     outpoint: Outpoint;
@@ -84,13 +83,13 @@ export class OpnsController extends Controller {
         const opnsMine = JSON.parse(mine.mine)
         const outpoint = Outpoint.fromBuffer(mine.outpoint)
         const txo = await Txo.getByOutpoint(outpoint)
-        const tx = await loadTx(txo.txid)
+        const script = await loadOutputScript(txo.txid, txo.vout)
         return {
             outpoint,
             origin: Outpoint.fromBuffer(mine.origin),
             domain: opnsMine.domain,
             pow: opnsMine.pow,
-            script: Utils.toBase64(tx.outputs[txo.vout].lockingScript.toBinary())
+            script: script.toString('base64')
         }
     }
 }

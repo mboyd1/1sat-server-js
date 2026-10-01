@@ -66,7 +66,9 @@ server.use(cors({
 }));
 server.use(responseTime(async (req, res, time) => {
     const reqTime = new Date();
-    console.log(reqTime.toISOString(), req.path, req.method, `${time}ms`);
+    // ip/status appended (not inserted) so existing column-based log parsing keeps working.
+    // req.ip is the client, not the LB, because 'trust proxy' is set above.
+    console.log(reqTime.toISOString(), req.path, req.method, `${time}ms`, res.statusCode, req.ip);
     // await pool.query(`INSERT INTO request_log(method, path, apikey, status, duration)
     //     VALUES($1, $2, $3, $4, $5)`, 
     //     [req.method, req.path, req.headers['API_KEY'], res.statusCode, time])

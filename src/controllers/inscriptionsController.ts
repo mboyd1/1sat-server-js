@@ -1,14 +1,13 @@
 import { NotFound } from 'http-errors';
 import * as createError from 'http-errors'
 import { Body, Controller, Get, Path, Post, Query, Route } from "tsoa";
-import { cache, loadTx, readPool } from "../db";
+import { cache, loadOutputScript, readPool } from "../db";
 import { Txo } from "../models/txo";
 import { TxoData } from "../models/txo";
 import { Outpoint } from "../models/outpoint";
 import { BadRequest } from "http-errors";
 import { SortDirection } from '../models/sort-direction';
 import { Address } from '@ts-bitcoin/core';
-import { Utils } from '@bsv/sdk';
 
 const { INDEXER } = process.env;
 
@@ -117,8 +116,7 @@ export class InscriptionsController extends Controller {
         this.setHeader('Cache-Control', 'public,max-age=86400')
         const txo = await Txo.getByOutpoint(Outpoint.fromString(outpoint));
         if (script) {
-            const tx = await loadTx(txo.txid);
-            txo.script = Utils.toBase64(tx.outputs[txo.vout].lockingScript.toBinary());
+            txo.script = (await loadOutputScript(txo.txid, txo.vout)).toString('base64');
         }
         return txo
     }
@@ -211,8 +209,7 @@ export class InscriptionsController extends Controller {
         // console.log(sql, origin)
         const txo = Txo.fromRow(latest);
         if (script) {
-            const tx = await loadTx(txo.txid);
-            txo.script = Utils.toBase64(tx.outputs[txo.vout].lockingScript.toBinary());
+            txo.script = (await loadOutputScript(txo.txid, txo.vout)).toString('base64');
         }
         return txo;
     }

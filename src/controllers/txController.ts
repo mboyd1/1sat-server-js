@@ -139,7 +139,7 @@ export class TxController extends Controller {
         const bin = await loadTxWithProof(txid);
         this.setStatus(200)
         this.setHeader('Content-Type', 'application/octet-stream')
-        req.res!.write(Buffer.from(bin));
+        req.res!.write(bin);
         req.res!.end();
     }
 
@@ -152,7 +152,7 @@ export class TxController extends Controller {
         this.setHeader('Content-Type', 'application/octet-stream')
         for await (const txid of txids) {
             const bin = await loadTxWithProof(txid);
-            req.res!.write(Buffer.from(bin));
+            req.res!.write(bin);
         }
         req.res!.end();
     }
